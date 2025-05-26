@@ -1,5 +1,6 @@
 import Pico_LCD
 from machine import Pin, Timer
+from rotary_irq_rp2 import RotaryIRQ
 import time
 
 
@@ -16,6 +17,16 @@ sw2 = Pin(4, Pin.IN, Pin.PULL_UP)
 # Rotary encoder pins
 clk = Pin(0, Pin.IN, Pin.PULL_UP)  # A (CLK)
 dt = Pin(1, Pin.IN, Pin.PULL_UP)   # B (DT)
+encoder = RotaryIRQ(pin_num_clk=0,
+                    pin_num_dt=1,
+                    min_val=0,
+                    max_val=100,
+                    incr=1,
+                    reverse=False,
+                    range_mode=RotaryIRQ.RANGE_UNBOUNDED,
+                    pull_up=True,
+                    half_step=False,
+                    invert=False)
 
 # Colors
 RED = 0x00f8
@@ -25,6 +36,8 @@ GOLD = 0xFEA0
 WHITE = RED | GREEN | BLUE
 
 # State variables
+val_old = encoder.value()
+
 life = 20
 poison = 0
 energy = 0
@@ -37,71 +50,64 @@ button2_down = False
 mode = 0
 reset_pressed_time = None
 both_pressed_time = None
-
-# Encoder interrupt state
-encoder_direction = 0
-encoder_changed = False
-encoder_last_time = 0
-encoder_debounce_ms = 20
-
-# Encoder ISR
-def encoder_handler(pin):
-    global encoder_direction, encoder_changed, encoder_last_time
-    now = time.ticks_ms()
-    if time.ticks_diff(now, encoder_last_time) > encoder_debounce_ms:
-        if dt.value() != clk.value():
-            encoder_direction = -1
-        else:
-            encoder_direction = 1
-        encoder_changed = True
-        encoder_last_time = now
-
-# Attach encoder interrupt
-clk.irq(trigger=Pin.IRQ_FALLING, handler=encoder_handler)
+previous_value = True
 
 def update_display(label, value, color):
-    lcd.fill(0)
-    text_str = str(value)
+    lcd.fill(0) #paint over our old picture
+    text_str = str(value) #the name of what we are tracking
     scale = 16 if len(text_str) == 1 else 256 // (len(text_str) * 8)
     text_width = len(text_str) * 8 * scale
     text_h = scale * 8
     avail_h = height - 48
-    x = (width - text_width) // 2
-    y = 48 + ((avail_h - text_h) // 2)
-    lcd.write_text(label, 15, 15, 3, color)
-    lcd.fill_rect(0, 43, 280, 2, color)
-    lcd.write_text(text_str, x, y, scale, color)
+    x = (width - text_width) // 2 #centers our text horizontally
+    y = 48 + ((avail_h - text_h) // 2) #centers our text vertically
+    lcd.write_text(label, 15, 15, 3, color) #displays the name of what we are tracking
+    lcd.fill_rect(0, 43, 280, 2, color) #dividing bar
+    lcd.write_text(text_str, x, y, scale, color) #displays the value of what we are tracking
     lcd.show()
 
+#initialize the display so there is something there on boot
 update_display("LIFE", life, WHITE)
 
 while True:
-    # Debounce increment selector button
+    # Selects increment
     if not sw3.value() and not button2_down:
         increment += 1
         if increment > 4:
             increment = 0
         button2_down = True
+    # Debounce for the button
     elif sw3.value() and button2_down:
         button2_down = False
 
     # Set delta from increment setting
     delta = [1, 2, 5, 10, 100][increment]
+    val_new = encoder.value()
 
-    # Handle encoder updates
-    if encoder_changed:
-        if mode == 0:
-            life += delta * encoder_direction
-        elif mode == 1:
-            poison += delta * encoder_direction
-        elif mode == 2:
-            energy += delta * encoder_direction
-        elif mode == 3:
-            experience += delta * encoder_direction
-        encoder_changed = False
+    if val_old != val_new:
+        if val_new > val_old:
+            print("RIGHT")
+            if mode == 0:
+                life += delta
+            elif mode == 1:
+                poison += delta
+            elif mode == 2:
+                energy += delta
+            elif mode == 3:
+                experience += delta
+        elif val_new < val_old:
+            print("LEFT")
+            if mode == 0:
+                life -= delta
+            elif mode == 1:
+                poison -= delta
+            elif mode == 2:
+                energy -= delta
+            elif mode == 3:
+                experience -= delta
+        val_old = val_new
+    time.sleep_ms(100)
 
-    # Optional: short sleep to reduce flicker/sensitivity
-    time.sleep_ms(4)
 
     # Handle simultaneous press (sw2 + sw3) to reset current value
     if not sw2.value() and not sw3.value():
